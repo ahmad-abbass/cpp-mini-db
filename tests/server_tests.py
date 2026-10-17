@@ -178,7 +178,8 @@ class ServerTests(unittest.TestCase):
         try:
             readable = select.select(connections, [], [], 5)[0]
             self.assertTrue(readable, "excess clients should get a busy response")
-            reply = json.loads(readable[0].recv(4096))
+            with readable[0].makefile('rb') as stream:
+                reply = json.loads(stream.readline())
             self.assertEqual(reply["code"], "busy")
         finally:
             for connection in connections:

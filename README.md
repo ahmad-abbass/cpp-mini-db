@@ -1,124 +1,151 @@
 # C++ Mini DB
 
-A small key-value database project, built step by step in C++17 to explore data structures, resource ownership, storage, and testing.
+[![C++ CI](https://github.com/ahmad-abbass/cpp-mini-db/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ahmad-abbass/cpp-mini-db/actions/workflows/ci.yml)
 
-## Project status
+A C++17 key-value storage system with a persistent write-ahead log, atomic write batches, ordered prefix scans, a concurrent TCP service, and a dependency-free Python client. Built as a systems programming learning project to explore what happens between a database API call and the bytes on disk.
 
-**Milestone 1: in-memory core.** The store, a runnable API example, automated tests, and a CMake build are implemented. GitHub Actions is configured for GCC and Clang. The interactive command-line interface and file persistence are still planned: data currently lives only in memory and is lost when the process exits.
+The full system targets **Linux**, including a Linux environment in WSL. The original portable in-memory `KeyValueStore` remains available. This is an educational single-process engine with an index that fits in memory, not a production database.
 
-## Goals
+## What works
 
-- Design a clear, testable C++ API for storing and retrieving string keys and values.
-- Apply RAII and explicit ownership to manage resources safely.
-- Learn how an in-memory index and file storage fit together.
-- Document design choices, complexity, limitations, and failure behavior.
+- Persistent string keys and values, including empty strings and arbitrary bytes.
+- Atomic ordered write batches with last-write-wins behavior within a batch.
+- WAL v2 with separate header and payload CRC-32 checksums; v1 compatibility and upgrade through compaction.
+- Recovery of incomplete final records, with complete corrupted records rejected instead of silently removed.
+- `fsync` before acknowledging writes by default; explicit buffered mode and `SYNC` barriers.
+- Exclusive ownership of a database directory through a separate lock file.
+- Concurrent reads, serialized writes, consistent bounded prefix-scan results, and compaction by synchronized file replacement.
+- Scriptable CLI and a loopback TCP server with a fixed worker pool, bounded queue, request limits, and timeouts.
+- Python client with binary data, UTF-8 string inputs, and a write-batch context manager.
+- Independent read-only WAL inspection, verified benchmarks, fault tests, and sanitizer/fuzzer CI.
 
-## Implemented
+## Build and test
 
-- A reusable `minidb::KeyValueStore` library with insert/update, lookup, membership, deletion, clear, and size queries.
-- Owning string keys and values, including empty strings and embedded null bytes.
-- Lookups that return independent copies through `std::optional`, distinguishing a missing key from an empty value.
-- 16 named test cases, including 5,000 deterministic operations compared against an independent `std::map` reference model.
-- A basic usage executable, CMake/CTest support, and an optional AddressSanitizer + UndefinedBehaviorSanitizer build.
-- A CI configuration for GCC Debug with sanitizers, GCC Release, and Clang Debug with sanitizers.
-
-The initial scope is a single-process, single-threaded educational tool. SQL, networking, transactions, concurrent access, encryption, and crash-safe recovery are outside the first release. It must not be used for production or sensitive data.
-
-## Build and run
-
-Requires CMake 3.20+ and a C++17 compiler. There are no third-party C++ dependencies or configure-time downloads.
+Requirements: CMake 3.20+, a C++17 compiler, Linux development tools, and Python 3.9+ for integration tests, the client, and tools. No third-party C++ libraries or Python packages are required. GCC and Clang are covered in CI.
 
 ```bash
 git clone https://github.com/ahmad-abbass/cpp-mini-db.git
 cd cpp-mini-db
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --parallel
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel 2
 ctest --test-dir build --output-on-failure
-./build/minidb_example
 ```
 
-Example output:
+For only the library and executables, use `-DBUILD_TESTING=OFF` to avoid the test-time Python requirement. Disable the optional benchmark executable with `-DMINIDB_BUILD_BENCHMARKS=OFF`.
 
-```text
-language = C++
-updated language = C++17
-entries = 1
-after erase = NOT FOUND
-```
-
-For the individual test-case results, run `./build/minidb_tests`. These commands assume a single-configuration generator on Linux/macOS; with a multi-configuration generator, build and test with `--config Debug` and `-C Debug`, respectively, and use the configuration-specific executable directory. Other platforms are not yet covered by CI.
-
-### Sanitizer build (GCC or Clang)
+## Run the complete demo
 
 ```bash
-cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug -DMINIDB_ENABLE_SANITIZERS=ON
-cmake --build build-sanitize --parallel
-ctest --test-dir build-sanitize --output-on-failure
+python3 tools/demo.py --server build/minidb_server
 ```
 
-Test checks remain active in Release builds; they do not rely on `assert()`.
+The demo owns a temporary database and server. It commits a batch, reads UTF-8 data, compacts the log, restarts the server, checks recovered values, and validates the stopped log through the independent inspector. It cleans up its temporary files and uses an automatically selected loopback port.
 
-## API behavior
+## Use the CLI
 
-| Operation | Result |
-| --- | --- |
-| `set(key, value)` | Inserts or replaces; returns `true` for a new key, `false` for an update. |
-| `get(key)` | Returns a copied value, or `std::nullopt` if absent. |
-| `contains(key)` | Reports whether the key exists, without inserting it. |
-| `erase(key)` | Returns `true` if an entry was removed; missing keys are harmless. |
-| `clear()` | Removes all entries; the store can be reused. |
-| `size()` / `empty()` | Reports the current entry count or whether it is empty. |
+```bash
+./build/minidb_cli ./data
+```
 
-Keys are case-sensitive. The store owns its inputs; changing the caller's strings does not change stored data. Copies of a store have independent contents. It is not thread-safe.
-
-## Planned interactive interface
-
-This example illustrates the intended CLI behavior; these commands are not implemented yet.
+Enter one command per line; each response is one JSON object:
 
 ```text
-> SET language "C++"
-OK
-> GET language
-C++
-> EXISTS language
-true
-> DEL language
-OK
-> GET language
-NOT FOUND
-> EXIT
+SET language "C++17"
+GET language
+BEGIN
+SET "user:1" "Ahmad"
+SET "user:2" "Maya"
+COMMIT
+SCAN "user:" 10
+STATS
+COMPACT
+QUIT
 ```
 
-Command syntax and persistence behavior will be finalized alongside the implementation and tests.
+`BEGIN` buffers writes privately. `COMMIT` writes them as one atomic batch. Reads inside a batch are rejected and abort that batch. This interface does not provide SQL transactions or a read-your-writes snapshot. An error, disconnect, or `QUIT` discards queued writes. See the [protocol reference](docs/protocol.md) for escaping, responses, and limits.
 
-## Implementation plan
+The CLI also accepts piped input and returns a nonzero exit code if a command fails. To reopen the same directory, first stop the process that owns it.
 
-- [x] Define the public store API and expected behavior.
-- [x] Implement the in-memory store, tests, and runnable example.
-- [x] Add CMake builds and a CI workflow.
-- [ ] Add a command parser and interactive CLI.
-- [ ] Specify a file format and implement validated save/load.
-- [ ] Add persistence and CLI integration tests.
-- [ ] Measure performance and document reproducible results.
+## Use the TCP service and Python client
 
-## Design direction
+Start the service in one terminal:
 
-The index uses `std::unordered_map<std::string, std::string>`. Lookup, membership, insert/update, and deletion have average constant-time container costs, but worst-case costs can be linear in the entry count. Hashing and comparing keys takes work proportional to the relevant key lengths; copying values through `get()` or input strings through `set()` adds string-copy costs. Insertions can also trigger rehashing. `size()` and `empty()` are constant-time; `clear()` is linear in the number of entries. Stored data occupies space proportional to the entries and their string contents.
+```bash
+./build/minidb_server ./data --port 7070 --workers 4
+```
 
-The implementation follows the Rule of Zero: standard containers own all resources, so custom destructors and manual allocation are unnecessary. Returning a copy from `get()` keeps the result independent of later updates, deletion, or destruction of the store. A custom index may be explored later as a separate, tested extension.
+Use another terminal:
 
-The future storage layer will remain separate from the in-memory store so that serialization and parsing can be tested independently. No performance or durability guarantees are claimed at this stage.
+```bash
+PYTHONPATH=clients/python python3 - <<'PY'
+from minidb_client import Client
 
-## Layout
+with Client(port=7070) as db:
+    with db.batch():
+        db.set("language", "C++17")
+        db.set("greeting", "مرحبا")
+    print(db.get("language").decode("utf-8"))
+    print(db.get("greeting").decode("utf-8"))
+    print(db.scan("lang"))
+PY
+```
 
-- `include/minidb/`: public library interface.
-- `src/`: implementation.
-- `examples/`: runnable API usage.
-- `tests/`: dependency-free tests and reference-model checks.
-- `.github/workflows/`: continuous integration.
+The server binds to `127.0.0.1`. It has no authentication or TLS and is intended for local experiments. A client connection belongs to one thread; use separate connections across threads. Values returned by the Python client are `bytes`, and a missing key returns `None`.
 
-## Author
+## Embed the C++ API
 
-[Ahmad Abbas](https://github.com/ahmad-abbass)
+```cpp
+#include "minidb/database.hpp"
 
-This is an independent learning project, not a published university assignment solution. Development milestones and completed work will be recorded as the implementation progresses.
+minidb::Database db("./data");
+db.write({minidb::Mutation::set("language", "C++17"),
+          minidb::Mutation::set("mode", "persistent")});
+auto value = db.get("language"); // std::optional<std::string>, owning copy
+auto rows = db.scan("lang", 10); // ordered, consistent copy
+db.compact();
+```
+
+Link against the CMake target `minidb::minidb`. `Database` is non-copyable and non-movable because it owns file locks and synchronization. The original `minidb::KeyValueStore` is a separate in-memory type using `std::unordered_map` and the Rule of Zero.
+
+## Inspect a stopped log
+
+```bash
+python3 tools/inspect_wal.py ./data/data.log
+```
+
+The inspector reports format version, frame offsets, operation counts, checksums, and incomplete tails without changing the file. Keys and values are hidden unless `--show-values` is supplied, which emits base64. Inspect a stopped database or a consistent copy, not a file changing under a live writer.
+
+## Measure and investigate
+
+```bash
+./build/minidb_bench --operations 2000 --value-bytes 128
+./build/minidb_bench --operations 500 --value-bytes 128 --durable
+python3 benchmarks/network_benchmark.py --server build/minidb_server --clients 4
+```
+
+Both benchmarks use temporary databases and verify their results. They report latency percentiles and throughput, label the durability mode, and avoid touching an existing user database. [Benchmark notes](docs/benchmarks.md) explain the workloads and the limitations of the checked-in sample runs.
+
+## Documentation
+
+| Read | Purpose |
+| --- | --- |
+| [Architecture](docs/architecture.md) | Components, write ordering, concurrency, and design tradeoffs |
+| [File format](docs/file-format.md) | Byte layout, recovery policy, compatibility, and compaction |
+| [Protocol](docs/protocol.md) | Commands, escaping, errors, batches, client behavior, and limits |
+| [Testing](docs/testing.md) | Fault injection, reference models, cross-language checks, sanitizers, and fuzzing |
+| [Benchmarks](docs/benchmarks.md) | Reproducible commands, measurements, and interpretation |
+| [Learning guide](docs/learning-guide.md) | Source reading order, exercises, and interview discussion questions |
+| [Contributing](CONTRIBUTING.md) | Feature branches, validation, and pull request expectations |
+| [Changelog](CHANGELOG.md) | Implemented milestones |
+
+## Limits and next work
+
+All live data is held in memory. Startup replays the log; compaction blocks writes and scans while it replaces the log. Only one process owns a directory. There is no SQL, replication, multi-process shared access, online backup, paginated scan cursor, TTL, or multi-version transaction isolation.
+
+The test suite covers process interruption, byte truncation, corruption, concurrency, and selected I/O failures. It does not certify behavior under every filesystem, physical power failure, failing device, or network filesystem. Parent directories newly created by `create_directories` are not recursively synchronized; provision a durable database directory before relying on power-loss durability. A write or sync error can have an uncertain commit outcome: the handle is poisoned and must be reopened. See the architecture and format notes before experimenting with failure recovery.
+
+Possible next milestones are paginated scans, offline export/import, broader syscall fault injection, and a separate storage index experiment. These are planned, not implemented features.
+
+## Development
+
+Repository owner: [Ahmad Abbas](https://github.com/ahmad-abbass). This is an independent learning project, separate from university assignment solutions. AI assistance was used for implementation, test design, review, and documentation. The branches and pull requests record actual feature development and validation; they do not represent independent human review.
