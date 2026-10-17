@@ -81,6 +81,9 @@ if(BUILD_TESTING)
         add_test(NAME command_line COMMAND ${Python3_EXECUTABLE}
             "${CMAKE_CURRENT_SOURCE_DIR}/tests/cli_tests.py" $<TARGET_FILE:minidb_cli>)
         set_tests_properties(command_line PROPERTIES TIMEOUT 60)
+        add_test(NAME wal_inspector COMMAND ${Python3_EXECUTABLE}
+            "${CMAKE_CURRENT_SOURCE_DIR}/tests/wal_inspector_tests.py" $<TARGET_FILE:minidb_cli>)
+        set_tests_properties(wal_inspector PROPERTIES TIMEOUT 60)
         if(TARGET minidb_server)
             add_test(NAME tcp_server COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/server_tests.py" $<TARGET_FILE:minidb_server>)
