@@ -1,0 +1,41 @@
+cmake_minimum_required(VERSION 3.20)
+project(cpp_mini_db VERSION 0.1.0 LANGUAGES CXX)
+
+set(CMAKE_CXX_EXTENSIONS OFF)
+option(MINIDB_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
+
+function(minidb_configure_target target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /WX)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    endif()
+
+    if(MINIDB_ENABLE_SANITIZERS)
+        if(NOT CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+            message(FATAL_ERROR "Sanitizers require GCC or Clang for this project")
+        endif()
+        target_compile_options(${target} PRIVATE
+            -fsanitize=address,undefined -fno-omit-frame-pointer)
+        target_link_options(${target} PRIVATE -fsanitize=address,undefined)
+    endif()
+endfunction()
+
+add_library(minidb STATIC src/key_value_store.cpp)
+add_library(minidb::minidb ALIAS minidb)
+target_include_directories(minidb PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
+target_compile_features(minidb PUBLIC cxx_std_17)
+minidb_configure_target(minidb)
+
+add_executable(minidb_example examples/basic_usage.cpp)
+target_link_libraries(minidb_example PRIVATE minidb::minidb)
+minidb_configure_target(minidb_example)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(minidb_tests tests/key_value_store_tests.cpp)
+    target_link_libraries(minidb_tests PRIVATE minidb::minidb)
+    minidb_configure_target(minidb_tests)
+    add_test(NAME key_value_store COMMAND minidb_tests)
+    add_test(NAME basic_usage COMMAND minidb_example)
+endif()

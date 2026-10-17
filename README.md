@@ -1,10 +1,10 @@
 # C++ Mini DB
 
-A small persistent key-value database, built step by step in modern C++ to explore data structures, resource ownership, storage, and testing.
+A small key-value database project, built step by step in C++17 to explore data structures, resource ownership, storage, and testing.
 
 ## Project status
 
-**Planning stage.** This repository currently documents the project direction. The database, command-line interface, persistence layer, tests, and build configuration are not implemented yet. The items below are planned work, not completed features.
+**Milestone 1: in-memory core.** The store, a runnable API example, automated tests, and a CMake build are implemented. GitHub Actions is configured for GCC and Clang. The interactive command-line interface and file persistence are still planned: data currently lives only in memory and is lost when the process exits.
 
 ## Goals
 
@@ -13,19 +13,67 @@ A small persistent key-value database, built step by step in modern C++ to explo
 - Learn how an in-memory index and file storage fit together.
 - Document design choices, complexity, limitations, and failure behavior.
 
-## Planned first release
+## Implemented
 
-- An in-memory key-value store with set, get, contains, and erase operations.
-- A command-line interface with readable error messages.
-- Saving data to a file and loading it on startup.
-- Automated tests covering updates, missing keys, empty values, and persistence round trips.
-- A CMake build and a GitHub Actions build-and-test workflow.
+- A reusable `minidb::KeyValueStore` library with insert/update, lookup, membership, deletion, clear, and size queries.
+- Owning string keys and values, including empty strings and embedded null bytes.
+- Lookups that return independent copies through `std::optional`, distinguishing a missing key from an empty value.
+- 16 named test cases, including 5,000 deterministic operations compared against an independent `std::map` reference model.
+- A basic usage executable, CMake/CTest support, and an optional AddressSanitizer + UndefinedBehaviorSanitizer build.
+- A CI configuration for GCC Debug with sanitizers, GCC Release, and Clang Debug with sanitizers.
 
 The initial scope is a single-process, single-threaded educational tool. SQL, networking, transactions, concurrent access, encryption, and crash-safe recovery are outside the first release. It must not be used for production or sensitive data.
 
-## Proposed interface
+## Build and run
 
-This example illustrates the intended behavior; it is not runnable yet.
+Requires CMake 3.20+ and a C++17 compiler. There are no third-party C++ dependencies or configure-time downloads.
+
+```bash
+git clone https://github.com/ahmad-abbass/cpp-mini-db.git
+cd cpp-mini-db
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
+./build/minidb_example
+```
+
+Example output:
+
+```text
+language = C++
+updated language = C++17
+entries = 1
+after erase = NOT FOUND
+```
+
+For the individual test-case results, run `./build/minidb_tests`. These commands assume a single-configuration generator on Linux/macOS; with a multi-configuration generator, build and test with `--config Debug` and `-C Debug`, respectively, and use the configuration-specific executable directory. Other platforms are not yet covered by CI.
+
+### Sanitizer build (GCC or Clang)
+
+```bash
+cmake -S . -B build-sanitize -DCMAKE_BUILD_TYPE=Debug -DMINIDB_ENABLE_SANITIZERS=ON
+cmake --build build-sanitize --parallel
+ctest --test-dir build-sanitize --output-on-failure
+```
+
+Test checks remain active in Release builds; they do not rely on `assert()`.
+
+## API behavior
+
+| Operation | Result |
+| --- | --- |
+| `set(key, value)` | Inserts or replaces; returns `true` for a new key, `false` for an update. |
+| `get(key)` | Returns a copied value, or `std::nullopt` if absent. |
+| `contains(key)` | Reports whether the key exists, without inserting it. |
+| `erase(key)` | Returns `true` if an entry was removed; missing keys are harmless. |
+| `clear()` | Removes all entries; the store can be reused. |
+| `size()` / `empty()` | Reports the current entry count or whether it is empty. |
+
+Keys are case-sensitive. The store owns its inputs; changing the caller's strings does not change stored data. Copies of a store have independent contents. It is not thread-safe.
+
+## Planned interactive interface
+
+This example illustrates the intended CLI behavior; these commands are not implemented yet.
 
 ```text
 > SET language "C++"
@@ -45,22 +93,29 @@ Command syntax and persistence behavior will be finalized alongside the implemen
 
 ## Implementation plan
 
-1. Define the public store API and expected behavior.
-2. Implement the in-memory store and its tests.
-3. Add a command parser and interactive CLI.
-4. Specify a file format, then implement save/load with validation.
-5. Add build automation and continuous integration.
-6. Publish reproducible usage instructions and document measured results.
+- [x] Define the public store API and expected behavior.
+- [x] Implement the in-memory store, tests, and runnable example.
+- [x] Add CMake builds and a CI workflow.
+- [ ] Add a command parser and interactive CLI.
+- [ ] Specify a file format and implement validated save/load.
+- [ ] Add persistence and CLI integration tests.
+- [ ] Measure performance and document reproducible results.
 
 ## Design direction
 
-The proposed implementation uses C++17 and the standard library. The first index will use `std::unordered_map`; its average and worst-case operation costs will be documented accurately. A custom index may be explored later as a separate, tested extension.
+The index uses `std::unordered_map<std::string, std::string>`. Lookup, membership, insert/update, and deletion have average constant-time container costs, but worst-case costs can be linear in the entry count. Hashing and comparing keys takes work proportional to the relevant key lengths; copying values through `get()` or input strings through `set()` adds string-copy costs. Insertions can also trigger rehashing. `size()` and `empty()` are constant-time; `clear()` is linear in the number of entries. Stored data occupies space proportional to the entries and their string contents.
 
-Storage will be separated from the in-memory store so that serialization and parsing can be tested independently. No performance or durability guarantees are claimed at this stage.
+The implementation follows the Rule of Zero: standard containers own all resources, so custom destructors and manual allocation are unnecessary. Returning a copy from `get()` keeps the result independent of later updates, deletion, or destruction of the store. A custom index may be explored later as a separate, tested extension.
 
-## Building and testing
+The future storage layer will remain separate from the in-memory store so that serialization and parsing can be tested independently. No performance or durability guarantees are claimed at this stage.
 
-Build and test commands will be added once the CMake targets and tests exist.
+## Layout
+
+- `include/minidb/`: public library interface.
+- `src/`: implementation.
+- `examples/`: runnable API usage.
+- `tests/`: dependency-free tests and reference-model checks.
+- `.github/workflows/`: continuous integration.
 
 ## Author
 
