@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(cpp_mini_db VERSION 0.1.0 LANGUAGES CXX)
+project(cpp_mini_db VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(MINIDB_ENABLE_SANITIZERS "Enable AddressSanitizer and UndefinedBehaviorSanitizer" OFF)
@@ -88,6 +88,9 @@ if(BUILD_TESTING)
             add_test(NAME tcp_server COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/tests/server_tests.py" $<TARGET_FILE:minidb_server>)
             set_tests_properties(tcp_server PROPERTIES TIMEOUT 120)
+            add_test(NAME complete_demo COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/tools/demo.py" --server $<TARGET_FILE:minidb_server>)
+            set_tests_properties(complete_demo PROPERTIES TIMEOUT 30)
             if(TARGET minidb_bench)
                 add_test(NAME embedded_benchmark_smoke COMMAND minidb_bench --operations 20)
                 add_test(NAME network_benchmark_smoke COMMAND ${Python3_EXECUTABLE}

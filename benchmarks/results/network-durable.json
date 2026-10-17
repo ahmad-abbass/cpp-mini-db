@@ -5,10 +5,10 @@
   "pairs": 1000,
   "value_bytes": 128,
   "sync_on_write": true,
-  "wall_seconds": 0.38526664199980587,
-  "pairs_per_second": 2595.6049420974887,
-  "p50_us": 1374.6675,
-  "p95_us": 2364.835,
-  "p99_us": 4143.746,
+  "wall_seconds": 0.35961922299975413,
+  "pairs_per_second": 2780.7189828689543,
+  "p50_us": 1339.9285,
+  "p95_us": 2063.088,
+  "p99_us": 2672.535,
   "verified": true
 }
