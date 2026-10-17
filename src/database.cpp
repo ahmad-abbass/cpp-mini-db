@@ -135,6 +135,7 @@ struct Database::Impl {
     std::uint64_t log_bytes = 0;
     std::uint64_t recovered_tail_bytes = 0;
     bool poisoned = false;
+    bool legacy_format = false;
 
     explicit Impl(std::filesystem::path path, DatabaseOptions opts)
         : directory(std::move(path)), options(opts) {
@@ -162,27 +163,32 @@ struct Database::Impl {
 
     void recover() {
         const auto header = read_at(log_fd.get(), wal::header_size, 0);
-        if (header != std::string(wal::file_header, wal::header_size)) {
+        legacy_format = header == std::string(wal::legacy_file_header, wal::header_size);
+        if (!legacy_format && header != std::string(wal::file_header, wal::header_size)) {
             throw CorruptionError("invalid or incomplete database header");
         }
         off_t at = static_cast<off_t>(wal::header_size);
         bool incomplete_tail = false;
+        const std::size_t prefix_size = legacy_format ? 8 : 12;
         for (;;) {
-            const auto prefix = read_at(log_fd.get(), 8, at);
+            const auto prefix = read_at(log_fd.get(), prefix_size, at);
             if (prefix.empty()) break;
-            if (prefix.size() != 8) { incomplete_tail = true; break; }
+            if (prefix.size() != prefix_size) { incomplete_tail = true; break; }
+            if (!legacy_format && wal::crc32(prefix.substr(0, 8)) != wal::read_u32(prefix.data() + 8)) {
+                throw CorruptionError("WAL header checksum mismatch at byte " + std::to_string(at));
+            }
             const auto length = wal::read_u32(prefix.data());
             if (length < 5 || length > Database::max_frame_bytes) {
                 throw CorruptionError("invalid WAL frame length at byte " + std::to_string(at));
             }
-            const auto payload = read_at(log_fd.get(), length, at + 8);
+            const auto payload = read_at(log_fd.get(), length, at + static_cast<off_t>(prefix_size));
             if (payload.size() != length) { incomplete_tail = true; break; }
             if (wal::crc32(payload) != wal::read_u32(prefix.data() + 4)) {
                 throw CorruptionError("WAL checksum mismatch at byte " + std::to_string(at));
             }
             auto batch = prepare(wal::decode(payload));
             apply(entries, batch);
-            at += 8 + static_cast<off_t>(length);
+            at += static_cast<off_t>(prefix_size) + static_cast<off_t>(length);
         }
         if (incomplete_tail) {
             struct stat status {};
@@ -198,7 +204,7 @@ struct Database::Impl {
     void commit(const std::vector<Mutation>& batch) {
         healthy();
         if (batch.empty()) return;
-        const auto bytes = wal::frame(batch);
+        const auto bytes = wal::frame(batch, legacy_format);
         auto prepared = prepare(batch);
         try {
             write_all(log_fd.get(), bytes);
@@ -234,7 +240,11 @@ std::optional<std::string> Database::get(const std::string& key) const {
     if (found == impl_->entries.end()) return std::nullopt;
     return found->second;
 }
-bool Database::contains(const std::string& key) const { return get(key).has_value(); }
+bool Database::contains(const std::string& key) const {
+    std::shared_lock<std::shared_mutex> guard(impl_->mutex);
+    impl_->healthy();
+    return impl_->entries.find(key) != impl_->entries.end();
+}
 std::size_t Database::size() const {
     std::shared_lock<std::shared_mutex> guard(impl_->mutex);
     impl_->healthy();
@@ -245,9 +255,15 @@ std::vector<std::pair<std::string, std::string>> Database::scan(
     std::shared_lock<std::shared_mutex> guard(impl_->mutex);
     impl_->healthy();
     std::vector<std::pair<std::string, std::string>> result;
+    std::size_t copied_bytes = 0;
     auto it = impl_->entries.lower_bound(prefix);
     while (it != impl_->entries.end() && result.size() < limit &&
            it->first.compare(0, prefix.size(), prefix) == 0) {
+        const auto row_bytes = it->first.size() + it->second.size();
+        if (row_bytes > max_frame_bytes - copied_bytes) {
+            throw std::invalid_argument("scan exceeds 16 MiB raw result limit; reduce the row limit");
+        }
+        copied_bytes += row_bytes;
         result.push_back(*it++);
     }
     return result;
@@ -256,7 +272,7 @@ DatabaseStats Database::stats() const {
     std::shared_lock<std::shared_mutex> guard(impl_->mutex);
     impl_->healthy();
     return {impl_->entries.size(), impl_->log_bytes, impl_->recovered_tail_bytes,
-            impl_->options.sync_on_write};
+            impl_->options.sync_on_write, impl_->legacy_format ? 1U : 2U};
 }
 void Database::sync() {
     std::unique_lock<std::shared_mutex> guard(impl_->mutex);
@@ -299,6 +315,7 @@ void Database::compact() {
         renamed = true;
         impl_->log_fd.reset(compacted.release());
         impl_->log_bytes = size;
+        impl_->legacy_format = false;
         sync_file(impl_->directory_fd.get());
     } catch (...) {
         if (renamed) impl_->poisoned = true;

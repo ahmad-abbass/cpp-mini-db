@@ -184,6 +184,15 @@ class ServerTests(unittest.TestCase):
             for connection in connections:
                 connection.close()
 
+    def test_json_response_budget_leaves_connection_usable(self):
+        with self.server.client() as client:
+            for i in range(3):
+                client.set(f'large:{i}', b'\xff' * (1024 * 1024))
+            with self.assertRaises(MiniDBError) as error:
+                client.scan('large:', 3)
+            self.assertEqual(error.exception.code, 'invalid_command')
+            self.assertEqual(client.ping(), 'PONG')
+
 
 if __name__ == '__main__':
     unittest.main()

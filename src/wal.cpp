@@ -109,12 +109,13 @@ std::vector<Mutation> decode(const std::string& payload) {
     return result;
 }
 
-std::string frame(const std::vector<Mutation>& batch) {
+std::string frame(const std::vector<Mutation>& batch, bool legacy) {
     auto payload = encode(batch);
     std::string out;
-    out.reserve(payload.size() + 8);
+    out.reserve(payload.size() + 12);
     append_u32(out, static_cast<std::uint32_t>(payload.size()));
     append_u32(out, crc32(payload));
+    if (!legacy) append_u32(out, crc32(out));
     out += payload;
     return out;
 }

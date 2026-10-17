@@ -43,6 +43,7 @@ struct DatabaseStats {
     std::uint64_t log_bytes;
     std::uint64_t recovered_tail_bytes;
     bool sync_on_write;
+    unsigned int format_version;
 };
 
 // POSIX persistent store. One owning process, concurrent threads, copied reads.
@@ -68,7 +69,8 @@ public:
     [[nodiscard]] std::optional<std::string> get(const std::string& key) const;
     [[nodiscard]] bool contains(const std::string& key) const;
     [[nodiscard]] std::size_t size() const;
-    // Ordered prefix scan returns a consistent, bounded copy under a read lock.
+    // Ordered prefix scan returns a consistent copy under a read lock. The
+    // combined raw key/value bytes are capped at 16 MiB; excess throws.
     [[nodiscard]] std::vector<std::pair<std::string, std::string>> scan(
         const std::string& prefix = {}, std::size_t limit = 100) const;
     [[nodiscard]] DatabaseStats stats() const;

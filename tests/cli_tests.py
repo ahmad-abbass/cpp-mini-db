@@ -81,6 +81,22 @@ class CliTests(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertEqual(json.loads(process.stdout)["value"], "PONG")
 
+    def test_field_limit_aborts_batch_without_writing(self):
+        replies = self.run_commands(['BEGIN', 'SET queued value',
+                                    'SET oversized ' + 'v' * (1024 * 1024 + 1),
+                                    'COMMIT', 'SIZE'], 1)
+        self.assertFalse(replies[2]["ok"])
+        self.assertFalse(replies[3]["ok"])
+        self.assertEqual(replies[4]["value"], 0)
+
+    def test_encoded_batch_limit_aborts_all_queued_writes(self):
+        value = 'v' * (1024 * 1024)
+        commands = ['BEGIN'] + [f'SET key{i} {value}' for i in range(16)] + ['COMMIT', 'SIZE']
+        replies = self.run_commands(commands, 1)
+        self.assertFalse(replies[-3]["ok"])
+        self.assertFalse(replies[-2]["ok"])
+        self.assertEqual(replies[-1]["value"], 0)
+
 
 if __name__ == '__main__':
     unittest.main()

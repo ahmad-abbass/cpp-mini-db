@@ -26,6 +26,7 @@ public:
     Socket(const Socket&) = delete;
     Socket& operator=(const Socket&) = delete;
     int get() const { return value_; }
+    int release() { const int value = value_; value_ = -1; return value; }
 private:
     int value_;
 };
@@ -196,10 +197,10 @@ int main(int argc, char** argv) {
                     ::close(fd);
                     continue;
                 }
+                Socket accepted(fd);
                 if (!pool.enqueue(fd)) {
                     send_all(fd, "{\"ok\":false,\"code\":\"busy\",\"error\":\"connection queue is full\"}\n");
-                    ::close(fd);
-                }
+                } else accepted.release();
             }
         }
         database.sync();
