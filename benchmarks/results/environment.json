@@ -1,0 +1,15 @@
+{
+  "recorded_at_utc": "2026-10-17T14:20:45.894917+00:00",
+  "architecture": "x86_64",
+  "kernel": "6.18.55",
+  "visible_cpu_model": "AMD EPYC 9V74 80-Core Processor",
+  "filesystem": "overlayfs",
+  "cmake_build_type": "Release",
+  "cxx_compiler": "GCC 13.3.0",
+  "environment": "shared execution container; underlying storage and host contention unknown",
+  "commands": [
+    "./build-big-release/minidb_bench --operations 2000 --value-bytes 128",
+    "./build-big-release/minidb_bench --operations 500 --value-bytes 128 --durable",
+    "python3 benchmarks/network_benchmark.py --server build-big-release/minidb_server --clients 4 --operations-per-client 250"
+  ]
+}
