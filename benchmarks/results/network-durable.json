@@ -1,0 +1,14 @@
+{
+  "workload": "tcp_set_get_pair",
+  "python": "3.12.14",
+  "clients": 4,
+  "pairs": 1000,
+  "value_bytes": 128,
+  "sync_on_write": true,
+  "wall_seconds": 0.38526664199980587,
+  "pairs_per_second": 2595.6049420974887,
+  "p50_us": 1374.6675,
+  "p95_us": 2364.835,
+  "p99_us": 4143.746,
+  "verified": true
+}
