@@ -2,6 +2,7 @@
 #include "wal.hpp"
 
 #include <atomic>
+#include <csignal>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -10,6 +11,8 @@
 #include <map>
 #include <random>
 #include <thread>
+#include <sys/resource.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace {
@@ -155,6 +158,7 @@ void format_validation_and_crc_golden_value() {
     std::string bytes(minidb::wal::file_header, minidb::wal::header_size);
     minidb::wal::append_u32(bytes, 5);
     minidb::wal::append_u32(bytes, minidb::wal::crc32(invalid_payload));
+    minidb::wal::append_u32(bytes, minidb::wal::crc32(bytes.substr(8, 8)));
     bytes += invalid_payload;
     write_file(temp.path / "data.log", bytes);
     rejects<minidb::CorruptionError>([&] { Database db(temp.path); });
@@ -229,6 +233,128 @@ void concurrent_batches_have_consistent_snapshots() {
     require(valid, "scan cannot observe half an atomic batch");
     db.sync();
 }
+
+void large_snapshot_compaction_and_scan_limit() {
+    TemporaryDirectory temp;
+    const std::string large(Database::max_field_bytes, 'v');
+    {
+        Database db(temp.path, {false});
+        for (int i = 0; i < 17; ++i) db.set(std::to_string(i), large);
+        rejects<std::invalid_argument>([&] { (void) db.scan("", 1000); });
+        require(db.scan("", 1).size() == 1, "small scan remains usable");
+        db.compact(); // Live state exceeds the maximum single WAL frame.
+    }
+    Database db(temp.path);
+    require(db.size() == 17 && db.get("16") == large, "multi-frame compacted snapshot recovers");
+}
+
+void child_succeeds(const std::function<void()>& action) {
+    const auto child = ::fork();
+    require(child >= 0, "fork failed");
+    if (child == 0) {
+        try { action(); ::_exit(0); }
+        catch (...) { ::_exit(1); }
+    }
+    int status = 0;
+    require(::waitpid(child, &status, 0) == child, "waitpid failed");
+    require(WIFEXITED(status) && WEXITSTATUS(status) == 0, "fault-injection child failed");
+}
+
+void partial_write_poison_and_recovery() {
+    TemporaryDirectory temp;
+    std::uint64_t committed;
+    { Database db(temp.path); db.set("stable", "yes"); committed = db.stats().log_bytes; }
+    child_succeeds([&] {
+        std::signal(SIGXFSZ, SIG_IGN);
+        rlimit limit {};
+        require(::getrlimit(RLIMIT_FSIZE, &limit) == 0, "getrlimit");
+        limit.rlim_cur = committed + 12;
+        require(::setrlimit(RLIMIT_FSIZE, &limit) == 0, "setrlimit");
+        Database db(temp.path, {false});
+        rejects<minidb::StorageError>([&] { db.set("partial", std::string(1000, 'x')); });
+        rejects<minidb::StorageError>([&] { (void) db.get("stable"); });
+        rejects<minidb::StorageError>([&] { db.set("later", "must not append"); });
+    });
+    Database db(temp.path);
+    require(db.get("stable") == "yes" && !db.contains("partial"), "partial write recovers last complete batch");
+    require(db.stats().recovered_tail_bytes == 12, "real short write tail recovered");
+    db.set("after", "recovery");
+}
+
+void failed_compaction_preserves_live_log() {
+    TemporaryDirectory temp;
+    { Database db(temp.path); db.set("stable", std::string(2048, 'v')); }
+    child_succeeds([&] {
+        std::signal(SIGXFSZ, SIG_IGN);
+        Database db(temp.path, {false});
+        const auto before = db.stats().log_bytes;
+        rlimit original {};
+        require(::getrlimit(RLIMIT_FSIZE, &original) == 0, "getrlimit");
+        auto limited = original;
+        limited.rlim_cur = 128;
+        require(::setrlimit(RLIMIT_FSIZE, &limited) == 0, "setrlimit");
+        rejects<minidb::StorageError>([&] { db.compact(); });
+        require(db.stats().log_bytes == before && db.get("stable") == std::string(2048, 'v'), "failed compaction keeps usable index and log");
+        require(::setrlimit(RLIMIT_FSIZE, &original) == 0, "restore rlimit");
+        db.set("after", "failed compaction");
+    });
+    Database db(temp.path);
+    require(db.get("after") == "failed compaction", "old log remains appendable");
+    for (const auto& entry : std::filesystem::directory_iterator(temp.path)) {
+        require(entry.path().filename().string().find("compact-") != 0, "failed compaction removes temporary file");
+    }
+}
+
+void malformed_payload_corpus() {
+    std::mt19937 random(20261017);
+    for (int trial = 0; trial < 20000; ++trial) {
+        std::string bytes(random() % 256, '\0');
+        for (char& byte : bytes) byte = static_cast<char>(random() & 255U);
+        // Also exercise small, plausible counts rather than only random u32s.
+        if (bytes.size() >= 4 && trial % 2 == 0) {
+            const auto count = random() % 8;
+            bytes[0] = static_cast<char>(count);
+            bytes[1] = bytes[2] = bytes[3] = '\0';
+        }
+        try {
+            const auto decoded = minidb::wal::decode(bytes);
+            require(minidb::wal::encode(decoded) == bytes, "successful decoding is canonical");
+        } catch (const minidb::CorruptionError&) { /* Expected invalid payload. */ }
+    }
+}
+
+void header_corruption_cannot_masquerade_as_a_torn_tail() {
+    TemporaryDirectory temp;
+    { Database db(temp.path); db.set("committed", "value"); }
+    auto bytes = read_file(temp.path / "data.log");
+    // Inflate an otherwise valid length past EOF; v2 verifies the header before
+    // deciding whether a final frame is incomplete.
+    bytes[9] ^= 1;
+    write_file(temp.path / "data.log", bytes);
+    rejects<minidb::CorruptionError>([&] { Database db(temp.path); });
+    require(read_file(temp.path / "data.log") == bytes, "damaged header must not discard committed data");
+}
+
+void legacy_logs_upgrade_on_compaction() {
+    TemporaryDirectory temp;
+    const auto old = std::string(minidb::wal::legacy_file_header, 8) +
+        minidb::wal::frame({Mutation::set("old", "v1")}, true);
+    write_file(temp.path / "data.log", old);
+    {
+        Database db(temp.path);
+        require(db.stats().format_version == 1 && db.get("old") == "v1", "legacy log opens");
+        db.set("append", "still v1");
+    }
+    {
+        Database db(temp.path);
+        require(db.get("append") == "still v1", "legacy append replays");
+        db.compact();
+        require(db.stats().format_version == 2, "compaction upgrades the envelope");
+        db.set("new", "v2");
+    }
+    Database db(temp.path);
+    require(db.size() == 3 && db.get("old") == "v1" && db.get("new") == "v2", "upgraded data reopens");
+}
 } // namespace
 
 int main() {
@@ -242,7 +368,13 @@ int main() {
         {"format validation and golden CRC", format_validation_and_crc_golden_value},
         {"compaction", compaction_reclaims_history},
         {"2000 reference model batches", randomized_reference_model},
-        {"concurrent snapshot consistency", concurrent_batches_have_consistent_snapshots}
+        {"concurrent snapshot consistency", concurrent_batches_have_consistent_snapshots},
+        {"large compaction and bounded scan", large_snapshot_compaction_and_scan_limit},
+        {"real partial write and poisoned handle", partial_write_poison_and_recovery},
+        {"failed compaction keeps live log", failed_compaction_preserves_live_log},
+        {"20000 malformed payloads", malformed_payload_corpus},
+        {"checksummed frame header", header_corruption_cannot_masquerade_as_a_torn_tail},
+        {"legacy format upgrade", legacy_logs_upgrade_on_compaction}
     };
     for (const auto& [name, test] : tests) {
         try { test(); std::cout << "PASS " << name << '\n'; }

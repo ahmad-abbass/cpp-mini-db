@@ -164,6 +164,7 @@ CommandResult CommandSession::dispatch(const std::vector<std::string>& words) {
         const auto stats = database_.stats();
         return {"{\"ok\":true,\"keys\":" + std::to_string(stats.keys) + ",\"log_bytes\":" + std::to_string(stats.log_bytes) +
                 ",\"recovered_tail_bytes\":" + std::to_string(stats.recovered_tail_bytes) +
+                ",\"format_version\":" + std::to_string(stats.format_version) +
                 ",\"sync_on_write\":" + (stats.sync_on_write ? "true}" : "false}")};
     }
     if (command == "SYNC") { arity(words, 1); database_.sync(); return {"{\"ok\":true}"}; }
