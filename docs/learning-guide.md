@@ -1,6 +1,6 @@
 # Learning guide
 
-The goal is to understand the implementation well enough to change it, diagnose a failure, and explain its tradeoffs. AI assistance was used to build the project. Reading a repository or owning its commits alone does not establish independent authorship or mastery of every component.
+The goal is to understand the implementation well enough to change it, diagnose a failure, and explain its tradeoffs. Reading a repository or owning its commits alone does not establish independent authorship or mastery of every component.
 
 ## Read in this order
 

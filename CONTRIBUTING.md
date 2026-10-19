@@ -14,4 +14,4 @@ PR descriptions should explain what changed, why, the validation actually perfor
 
 If a format change affects existing files, specify and test the compatibility or migration policy. If I/O fails after a write could have reached storage, preserve the uncertain-outcome contract rather than claiming rollback. Never repair a corrupt file by silently discarding a complete invalid record.
 
-AI-assisted contributions are welcome when clearly described. The contributor must understand the proposed behavior and avoid unsupported correctness, durability, performance, or authorship claims. Do not upload university assignment solutions to this independent project.
+Contributors must understand the proposed behavior and avoid unsupported correctness, durability, performance, or authorship claims. Do not upload university assignment solutions to this independent project.

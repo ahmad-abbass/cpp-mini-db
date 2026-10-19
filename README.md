@@ -148,4 +148,4 @@ Possible next milestones are paginated scans, offline export/import, broader sys
 
 ## Development
 
-Repository owner: [Ahmad Abbas](https://github.com/ahmad-abbass). This is an independent learning project, separate from university assignment solutions. AI assistance was used for implementation, test design, review, and documentation. The branches and pull requests record actual feature development and validation; they do not represent independent human review.
+Repository owner: [Ahmad Abbas](https://github.com/ahmad-abbass). This is an independent learning project, separate from university assignment solutions. The branches and pull requests record actual feature development and validation; they do not represent independent human review.
